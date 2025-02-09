@@ -1,0 +1,96 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+```{r}
+library(readxl)   
+library(dplyr)   
+library(tidyverse) 
+library(pracma)
+```
+```{r}
+install.packages("microbenchmark")
+library(microbenchmark)
+```
+
+```{r}
+install.packages("data.table")
+library(data.table)
+```
+
+
+```{r}
+install.packages("readxl")
+```
+
+```{r}
+df <- read_excel("C:/Users/supra/Downloads/clinics.xls")
+head(df)
+```
+## Haversine
+
+```{r}
+haversine <- function(lat1, lon1, lat2, lon2) {
+  R <- 3959  
+  
+  phi1 <- lat1 * pi / 180
+  phi2 <- lat2 * pi / 180
+  delta_phi <- (lat2 - lat1) * pi / 180
+  delta_lambda <- (lon2 - lon1) * pi / 180
+  
+  # Calculate the Haversine distance
+  a <- sin(delta_phi / 2) * sin(delta_phi / 2) + cos(phi1) * cos(phi2) * sin(delta_lambda / 2) * sin(delta_lambda / 2)
+  c <- 2 * atan2(sqrt(a), sqrt(1 - a))
+  
+  distance <- R * c  
+  return(distance)
+}
+```
+
+## Using for-loop based approach 
+
+```{r}
+for_loop_approach <- microbenchmark(
+  loop_distance = {
+    distances <- numeric(nrow(df))
+    for (i in 1:nrow(df)) {
+      distances[i] <- haversine(40.671, -73.985, df$locLat[i], df$locLong[i])
+    }
+    df$distance <- distances
+  },
+  times = 10  # Run the test 10 times
+)
+for_loop_approach
+```
+
+**Interpretation:** The microbenchmark result of 4.9874 ms indicates that the for-loop approach to calculate the Haversine distance for each row in the df DataFrame took an average of 4.9874 milliseconds per loop. This method iterates over each row individually, calculates the distance, and stores it in the distances vector, which is then added as a new column to the DataFrame. While this approach is simple and intuitive, it tends to be slower compared to vectorized operations because it involves explicit iteration over each row, leading to higher computational overhead.
+
+## Benchmarking Vectorized Approach Using apply() 
+
+```{r}
+vectorized_approach <- microbenchmark(
+  apply_distance = {
+
+    df$distance <- apply(df, 1, function(row) {
+      haversine(40.671, -73.985, as.numeric(row['locLat']), as.numeric(row['locLong']))
+    })
+  },
+  times = 10  # Run the test 10 times
+)
+vectorized_approach
+```
+
+**Interpretation:** The microbenchmark result of 1036.45 microseconds indicates that the vectorized approach using apply() to calculate the Haversine distance for each row in the df DataFrame took an average of 1036.45 microseconds per loop. This method applies a function to each row of the DataFrame, extracting the latitude and longitude values, converting them to numeric, and then calculating the distance. While this approach is more efficient than a traditional for loop, it is still not as fast as fully vectorized operations that avoid the row-wise processing overhead. Despite being more efficient than explicit iteration, it is still relatively slower than direct vectorized column operations. 
+
+## Benchmarking Vectorized Column-Wise Approach 
+
+```{r}
+vectorized_column_approach <- microbenchmark(
+  base_distance = {
+    df$distance <- haversine(40.671, -73.985, df$locLat, df$locLong)  
+  },
+  times = 10
+)
+vectorized_column_approach
+```
+**Interpretation:** The microbenchmark result of 37.11 microseconds indicates that the vectorized column-wise approach to calculate the Haversine distance for each row in the df DataFrame took an average of 37.11 microseconds per loop. This approach leverages the power of vectorization, applying the Haversine function directly on the entire locLat and locLong columns without explicit iteration. As a result, this method is significantly faster than row-wise operations such as those using apply() or for loops. 
