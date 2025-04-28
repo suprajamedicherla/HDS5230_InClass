@@ -1,0 +1,179 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+```{r}
+#Load necessary libraries
+install.packages("mlbench")  
+library(mlbench)
+```
+
+```{r}
+library(xgboost)
+library(data.table)
+library(Matrix)
+library(microbenchmark)
+library(tidyverse)
+library(caret)
+library(dplyr)
+```
+
+```{r}
+#Load the data
+data("PimaIndiansDiabetes2")
+ds <- as.data.frame(na.omit(PimaIndiansDiabetes2))
+```
+
+
+```{r}
+## fit a logistic regression model to obtain a parametric equation
+logmodel <- glm(diabetes ~ .,
+                data = ds,
+                family = "binomial")
+summary(logmodel)
+
+cfs <- coefficients(logmodel) ## extract the coefficients
+prednames <- variable.names(ds)[-9] ## fetch the names of predictors in a vector
+prednames
+
+sz <- 1000000 ## to be used in sampling
+##sample(ds$pregnant, size = sz, replace = T)
+
+dfdata <- map_dfc(prednames,
+                  function(nm){ ## function to create a sample-with-replacement for each pred.
+                    eval(parse(text = paste0("sample(ds$",nm,
+                                             ", size = sz, replace = T)")))
+                  }) ## map the sample-generator on to the vector of predictors
+## and combine them into a dataframe
+
+names(dfdata) <- prednames
+dfdata
+
+class(cfs[2:length(cfs)])
+
+length(cfs)
+length(prednames)
+## Next, compute the logit values
+pvec <- map((1:8),
+            function(pnum){
+              cfs[pnum+1] * eval(parse(text = paste0("dfdata$",
+                                                     prednames[pnum])))
+            }) %>% ## create beta[i] * x[i]
+  reduce(`+`) + ## sum(beta[i] * x[i])
+  cfs[1] ## add the intercept
+
+## exponentiate the logit to obtain probability values of thee outcome variable
+dfdata['outcome'] <- ifelse(1/(1 + exp(-(pvec))) > 0.5,
+                            1, 0)
+```
+
+
+### 1. Compare the accuracy values of XGBoost models fit on the newly created data, for the following sizes of datasets. Along with accuracy, report the time taken for computing the results. Report your results in a table with the following schema.
+
+**XGBoost in R – direct use of xgboost() with simple cross-validation:**
+
+```{r}
+# Convert the outcome variable to numeric type
+dfdata$outcome <- as.numeric(as.character(dfdata$outcome))
+
+sizes <- c(100, 1000, 10000, 100000, 1000000, 10000000)
+
+simple_cv <- lapply(sizes, function(sz) {
+  
+  dssample <- dfdata[sample(1:nrow(dfdata), size = sz, replace = TRUE), ]
+  
+  X_sample <- as.matrix(dssample[, prednames])  
+  y_sample <- as.numeric(as.character(dssample$outcome)) 
+  
+  # Create a DMatrix object
+  dtrain <- xgb.DMatrix(data = X_sample, label = y_sample)
+  
+  # Set the model parameters
+  params <- list(
+    objective = "binary:logistic",
+    eval_metric = "error",
+    max_depth = 2,
+    eta = 0.3,
+    verbosity = 0
+  )
+  
+  set.seed(123)
+
+  # Measure the time taken to perform cross-validation
+  timing <- system.time({
+    cv_model <- xgb.cv(
+      params = params,
+      data = dtrain,
+      nrounds = 10,
+      nfold = 5,
+      verbose = 0,
+      showsd = TRUE,
+      early_stopping_rounds = 5
+    )
+  })
+  
+  best_error <- min(cv_model$evaluation_log$test_error_mean)
+  accuracy <- 1 - best_error
+  
+  data.frame(
+    Method = "XGBoost in R – direct use of xgboost() with simple cross-validation",
+    Dataset_Size = format(sz, scientific = FALSE),
+    Accuracy = accuracy,
+    Time_Taken = as.numeric(timing["elapsed"])
+  )
+})
+
+simple_cv_results <- bind_rows(simple_cv)
+simple_cv_results 
+```
+
+**XGBoost in R – via caret, with 5-fold CV simple cross-validation:**
+
+```{r}
+#Convert the outcome variable a factor 
+dfdata$outcome <- as.factor(dfdata$outcome)
+
+sizes <- c(100, 1000, 10000, 100000, 1000000, 10000000)
+
+simple_cv2 <- lapply(sizes, function(sz) {
+  
+  # Sample data
+  dssample <- dfdata[sample(1:nrow(dfdata), size = sz, replace = TRUE), ]
+  
+  set.seed(123)
+  
+  timing <- system.time({
+  
+    ctrl <- trainControl(method = "cv", number = 5)
+    
+    model <- train(outcome ~ .,
+                   data = dssample,
+                   method = "xgbTree",
+                   trControl = ctrl,
+                   tuneGrid = expand.grid(
+                     nrounds = 10,
+                     max_depth = 2,
+                     eta = 0.3,
+                     gamma = 0,
+                     colsample_bytree = 1,
+                     min_child_weight = 1,
+                     subsample = 1
+                   ),
+                   verbose = 0)
+  })
+  
+  # Extract best accuracy
+  best_accuracy <- max(model$results$Accuracy)
+  
+  data.frame(
+    Method = "XGBoost in R – via caret, with 5-fold CV simple cross-validation",
+    Dataset_Size = format(sz, scientific = FALSE),
+    Accuracy = best_accuracy,
+    Time_Taken = as.numeric(timing["elapsed"])
+  )
+})
+
+results_caret_cv <- bind_rows(simple_cv2)
+results_caret_cv
+```
+
